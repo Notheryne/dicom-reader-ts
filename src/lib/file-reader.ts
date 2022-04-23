@@ -4,7 +4,7 @@ import _ from 'lodash';
 import {
   Constants,
   DicomDictionary,
-  DicomDictionaryEntriesEnum
+  DicomDictionaryEntriesEnum, ExtraLengthVRs
 } from '../constants/index';
 
 
@@ -81,6 +81,22 @@ const getEndianPattern = (isLittleEndian: boolean, isImplicitVR: boolean) => {
 };
 
 console.log({ createTag, getEndianPattern });
+const getEmptyValueForVR = (VR: string) => {
+  if (VR === 'SQ') {
+    return [];
+  }
+
+  if (VR === 'PN') {
+    return '_PN_';
+  }
+
+  if (_.includes(['AE', 'AS', 'CS', 'DA', 'DT', 'LO', 'LT', 'SH', 'ST', 'TM',
+    'UC', 'UI', 'UR', 'UT'], VR)) {
+    return '';
+  }
+
+  return null;
+};
 
 const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boolean, isLittleEndian: boolean, stopWhen?: StopWhenFunction) => {
   const data = Uint8Helpers.splitArray(bytes, cursor)[1];
@@ -90,7 +106,7 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
 
   // // generator part
   const elementPattern = getEndianPattern(isLittleEndian, isImplicitVR);
-  const extraLengthPattern = !isImplicitVR ? `${elementPattern}L` : null;
+  const extraLengthPattern = `${getEndianCharacter(isLittleEndian)}L`;
   console.log({ extraLengthPattern, isImplicitVR, stopWhen });
   // const bytesChunks = _.chunk(data, 8);
   // const lastChunkLength = bytesChunks[bytesChunks.length - 1].length;
@@ -110,6 +126,7 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
     const tagLength = 8;
     // eslint-disable-next-line functional/no-let
     let index = 0;
+    const result = {};
     // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
     while (true) {
       const tagInfo = Uint8Helpers.getArrayRange(data, index, tagLength);
@@ -117,38 +134,57 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
         break;
       }
       const [group, elem, VR, length] = Bufferpack.unpack(elementPattern, tagInfo, 0);
-      console.log({group, elem, VR, length, index});
+      index += tagLength;
+      // eslint-disable-next-line functional/no-let
+      let trueLength = length;
+
       if (_.isFunction(stopWhen)) {
         if (stopWhen(group, VR.toString(), length)) {
-          console.log('stop', {group, VR, length, index});
+          console.log('stopping at:', {
+            group,
+            elem,
+            VR,
+            length,
+            index,
+            tagInfo,
+            trueLength
+          });
           break;
         }
-
-      }
-      if (length !== 0) {
-        index = index + length + tagLength;
-      } else {
-        index = index + 14;
       }
 
+      if (_.includes(ExtraLengthVRs, VR)) {
+        const extraLength = 4;
+        const extraLengthInfo = Uint8Helpers.getArrayRange(data, index, extraLength);
+        const extraLengthUnpacked = Bufferpack.unpack(extraLengthPattern, extraLengthInfo, 0);
+        trueLength = extraLengthUnpacked[0];
+        index += extraLength;
+      }
+      // index += trueLength;
+
+      // reading values!
+
+      if (trueLength !== parseInt('0xFFFFFFFF', 16)) {
+        // const value = trueLength > 0 ? Uint8Helpers.getArrayRange(data, index, trueLength) : getEmptyValueForVR(VR);
+        if (trueLength > 0) {
+          const value = Uint8Helpers.getArrayRange(data, index, trueLength);
+          index += trueLength;
+          console.log('Reading DICOM:', {
+            group,
+            elem,
+            VR,
+            length: trueLength,
+            rawValue: value,
+            value: _.join(_.map(value, (v) => {
+              return String.fromCharCode(v);
+            }), '')
+          })
+        }
+      }
+      console.error('not implemented yet, readDataset explicitVR');
     }
-    // const result = _.reduce(data, (acc: { readonly seek: number, readonly isSeekingValue: boolean, readonly chunk: readonly number[], readonly tagInfo: readonly number[], readonly result: readonly number[] }, element, index) => {
-    //
-    //   return acc;
-    // }, { seek: 0, isSeekingValue: false, chunk: [], tagInfo: [], result: [] });
-    // console.log({result});
-    // _.forEach(safeBytesChunks, (chunk: readonly number[]) => {
-    //   const [group, elem, VR, length] = Bufferpack.unpack(elementPattern, chunk, 0);
-    //   console.log({group, elem, VR, length, chunk});
-    //
-    // })
-    console.error('not implemented yet, readDataset explicitVR');
-    // _.forEach(safeBytesChunks, (chunk: readonly number[]) => {
-    //   const [group, elem, VR, length] = Bufferpack.unpack(elementPattern, chunk, 0);
-    //   console.log({group, elem, VR, length})
-    // });
-  }
 
+  }
 };
 
 const _notGroup0002 = (group: number): boolean => {
@@ -175,7 +211,7 @@ const _isImplicitVr = (
   }
 
   const foundImplicit = !(_.inRange(rawVR[0], 0x40, 0x5B) && (_.inRange(rawVR[1], 0x40, 0x5B)));
-  console.log({ foundImplicit, isImplicitVRAssumed });
+  // console.log({ foundImplicit, isImplicitVRAssumed });
   if (foundImplicit !== isImplicitVRAssumed) {
     console.error('not implemented yet, foundImplicit !== isImplicitVrAssumed!', {
       tagBytes,

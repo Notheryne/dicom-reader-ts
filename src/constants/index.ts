@@ -5,7 +5,7 @@ const Constants = {
   ERRORS: {
     MISSING_DICOM_FILE_META_INFORMATION_HEADER: 'The file does not contain DICOM File Meta Information Header or the "DICM" prefix is missing.'
   },
-  SPECIFIC_CHARACTER_SET_TAG: '00080005',
+  SPECIFIC_CHARACTER_SET_TAG: '00080005'
 };
 
 enum DicomDictionaryEntriesEnum {
@@ -16,8 +16,12 @@ enum DicomDictionaryEntriesEnum {
   'Keyword'
 }
 
+const ExtraLengthVRs = ['OB', 'OD', 'OF', 'OL', 'OW', 'SQ', 'UC', 'UN', 'UR', 'UT'];
+
+
 export {
   Constants,
   DicomDictionary,
-  DicomDictionaryEntriesEnum
+  DicomDictionaryEntriesEnum,
+  ExtraLengthVRs
 };
