@@ -1,3 +1,4 @@
+import { KnownUIDs } from './UIDs';
 import DicomDictionary from './dicom-dictionary';
 
 const Constants = {
@@ -23,5 +24,6 @@ export {
   Constants,
   DicomDictionary,
   DicomDictionaryEntriesEnum,
-  ExtraLengthVRs
+  ExtraLengthVRs,
+  KnownUIDs
 };

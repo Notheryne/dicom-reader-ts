@@ -1,16 +1,22 @@
 import Bufferpack from 'bufferpack';
-import _ from 'lodash';
+import _, { join, map, omit, take, takeRight } from 'lodash';
 
 import {
   Constants,
   DicomDictionary,
-  DicomDictionaryEntriesEnum, ExtraLengthVRs
+  DicomDictionaryEntriesEnum,
+  ExtraLengthVRs, KnownUIDs
 } from '../constants/index';
+import { ITagInfo } from '../types';
 
+import { converters, convertValue } from './converter';
+import { getEndianCharacter, getEndianPattern } from './helpers';
+
+const print = console.log;
+print(print);
 
 const Uint8Helpers = {
   arrayToHex: (bytes: Uint8Array): readonly string[] => {
-    // noinspection TypeScriptValidateJSTypes
     return _.map(bytes, (byte) => byte.toString(16).padStart(2, '0'));
   },
 
@@ -29,16 +35,16 @@ const Uint8Helpers = {
   }
 };
 
-const DicomHelpers = {
-  getTagProperty: (tag: string | readonly string[], property: keyof typeof DicomDictionaryEntriesEnum) => {
-    // Tag: VR, VM, Name, Retired, Keyword
-    const propertyIndex = DicomDictionaryEntriesEnum[property];
-    if (_.isString(tag)) {
-      return DicomDictionary[tag][propertyIndex];
-    }
-    return tag[propertyIndex];
-  }
-};
+// const DicomHelpers = {
+//   getTagProperty: (tag: string | readonly string[], property: keyof typeof DicomDictionaryEntriesEnum) => {
+//     // Tag: VR, VM, Name, Retired, Keyword
+//     const propertyIndex = DicomDictionaryEntriesEnum[property];
+//     if (_.isString(tag)) {
+//       return DicomDictionary[tag][propertyIndex];
+//     }
+//     return tag[propertyIndex];
+//   }
+// };
 
 
 const readPreamble = (bytes: Uint8Array) => {
@@ -46,149 +52,146 @@ const readPreamble = (bytes: Uint8Array) => {
   const [preamble, magic] = Uint8Helpers.splitArray(fileMetaInformationHeader, 128);
   const magicAsText = Uint8Helpers.arrayToText(magic);
   if (magicAsText !== Constants.DICOM_MAGIC_PREFIX) {
-    // throw TypeError();
     console.error(Constants.ERRORS.MISSING_DICOM_FILE_META_INFORMATION_HEADER);
-    return { preamble: [], cursor: 0 };
+    return { preamble: [], newCursorPosition: 0 };
   }
-  return { preamble, cursor: 132 };
+  return { preamble, newCursorPosition: 132 };
 };
-
-type ITag = {
-  readonly name: string,
-  readonly tag: string
-  readonly value?: any,
-}
 
 type StopWhenFunction = (group: number, VR?: string, length?: number) => boolean;
 
-const createTag = (identifier: string | readonly string[], value?: any): ITag => {
-  const identifierToUse = _.isString(identifier) ? identifier : identifier.join('');
-  const tagInfo = DicomDictionary[identifierToUse];
+type IKnownTagValues = {
+  readonly VR?: string,
+  readonly length?: number,
+  readonly rawValue?: Uint8Array,
+  readonly value?: unknown,
+}
+
+type ITagValues = IKnownTagValues & {
+  readonly [key: string]: unknown,
+};
+
+type ITag = ITagValues & {
+  name: string,
+  readonly representation: string,
+  readonly representations: {
+    group: number,
+    element: number,
+    hexGroup: string,
+    hexElement: string,
+    tuple: readonly string[],
+    string: string,
+    name: string,
+  }
+}
+
+const createTag = (group: number, element: number, values: ITagValues): ITag => {
+  const hexGroup = join(takeRight(`0000${group.toString(16)}`, 4), '');
+  const hexElement = join(takeRight(`0000${element.toString(16)}`, 4), '');
+  const stringRepresentation = `${hexGroup}${hexElement}`;
+  const dicomDictionaryEntry = DicomDictionary[stringRepresentation];
+
+  const representations = {
+    group,
+    element,
+    hexGroup,
+    hexElement,
+    tuple: [hexGroup, hexElement],
+    string: stringRepresentation,
+    name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name]
+  };
+
 
   return {
-    value,
-    name: DicomHelpers.getTagProperty(tagInfo, 'Name'),
-    tag: identifierToUse
+    representations,
+    ...omit(values, 'representations'),
+    representation: stringRepresentation,
+    VR: values.VR || dicomDictionaryEntry[DicomDictionaryEntriesEnum.VR],
+    name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name],
+    VM: dicomDictionaryEntry[DicomDictionaryEntriesEnum.VM],
+    keyword: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Keyword],
+    retired: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Retired]
   };
 };
 
-const getEndianCharacter = (isLittleEndian: boolean) => {
-  return isLittleEndian ? '<' : '>';
-};
+// const getTagValue = (VR: string, value: Uint8Array) => {
+//   const longVRs = ['OB', 'OD', 'OF', 'OW', 'UN', 'UT'];
+//   const numberVRs =
+//   const stringVRs = []
+// }
 
-const getEndianPattern = (isLittleEndian: boolean, isImplicitVR: boolean) => {
-  return `${getEndianCharacter(isLittleEndian)}${isImplicitVR ? 'HHL' : 'HH2sH'}`;
-};
 
-console.log({ createTag, getEndianPattern });
-const getEmptyValueForVR = (VR: string) => {
-  if (VR === 'SQ') {
-    return [];
-  }
-
-  if (VR === 'PN') {
-    return '_PN_';
-  }
-
-  if (_.includes(['AE', 'AS', 'CS', 'DA', 'DT', 'LO', 'LT', 'SH', 'ST', 'TM',
-    'UC', 'UI', 'UR', 'UT'], VR)) {
-    return '';
-  }
-
-  return null;
-};
-
-const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boolean, isLittleEndian: boolean, stopWhen?: StopWhenFunction) => {
+const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boolean, isLittleEndian: boolean, stopWhen: StopWhenFunction) => {
   const data = Uint8Helpers.splitArray(bytes, cursor)[1];
-  const isImplicitVR = _isImplicitVr(bytes, cursor, isImplicitVRAssumed, isLittleEndian, _notGroup0002);
-
-  console.log({ data, isImplicitVR, stopWhen });
+  const isImplicitVR = _isImplicitVr(bytes, cursor, isImplicitVRAssumed, isLittleEndian, stopWhen);
 
   // // generator part
   const elementPattern = getEndianPattern(isLittleEndian, isImplicitVR);
   const extraLengthPattern = `${getEndianCharacter(isLittleEndian)}L`;
-  console.log({ extraLengthPattern, isImplicitVR, stopWhen });
-  // const bytesChunks = _.chunk(data, 8);
-  // const lastChunkLength = bytesChunks[bytesChunks.length - 1].length;
-  // const safeBytesChunks = (lastChunkLength === 8 ? bytesChunks : bytesChunks.slice(0, -1)).slice(0, 128);
+
+  const dataset: { [key: string]: ITag } = {};
+  // eslint-disable-next-line functional/no-let
+  let cursorPositionChange = 0;
 
   if (isImplicitVR) {
     console.error('not implemented yet, readDataset implicitVR');
-
-    // const tags = [createTag(Constants.SPECIFIC_CHARACTER_SET_TAG), ..._.forEach(safeBytesChunks, (chunk: readonly number[]) => {
-    //   const [group, element, length] = Bufferpack.unpack(elementPattern, chunk, 0);
-    //   if (stopWhen) {
-    //     console.error('stopWhen not implemented yet in readDatabase');
-    //   }
-    //   console.log({ group, element, length });
-    // })];
   } else {
     const tagLength = 8;
-    // eslint-disable-next-line functional/no-let
-    let index = 0;
-    const result = {};
     // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
     while (true) {
-      const tagInfo = Uint8Helpers.getArrayRange(data, index, tagLength);
+      const tagInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, tagLength);
       if (tagInfo.length !== 8) {
         break;
       }
       const [group, elem, VR, length] = Bufferpack.unpack(elementPattern, tagInfo, 0);
-      index += tagLength;
-      // eslint-disable-next-line functional/no-let
-      let trueLength = length;
 
       if (_.isFunction(stopWhen)) {
         if (stopWhen(group, VR.toString(), length)) {
-          console.log('stopping at:', {
-            group,
-            elem,
-            VR,
-            length,
-            index,
-            tagInfo,
-            trueLength
-          });
           break;
         }
       }
 
+      cursorPositionChange += tagLength;
+      // eslint-disable-next-line functional/no-let
+      let trueLength = length;
+
       if (_.includes(ExtraLengthVRs, VR)) {
         const extraLength = 4;
-        const extraLengthInfo = Uint8Helpers.getArrayRange(data, index, extraLength);
+        const extraLengthInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, extraLength);
         const extraLengthUnpacked = Bufferpack.unpack(extraLengthPattern, extraLengthInfo, 0);
         trueLength = extraLengthUnpacked[0];
-        index += extraLength;
+        cursorPositionChange += extraLength;
       }
-      // index += trueLength;
 
       // reading values!
-
       if (trueLength !== parseInt('0xFFFFFFFF', 16)) {
-        // const value = trueLength > 0 ? Uint8Helpers.getArrayRange(data, index, trueLength) : getEmptyValueForVR(VR);
         if (trueLength > 0) {
-          const value = Uint8Helpers.getArrayRange(data, index, trueLength);
-          index += trueLength;
-          console.log('Reading DICOM:', {
-            group,
-            elem,
+          const value = Uint8Helpers.getArrayRange(data, cursorPositionChange, trueLength);
+          cursorPositionChange += trueLength;
+          const tagInfo: ITagInfo = {
+            VR,
+            length: trueLength,
+            rawValue: value
+          };
+
+          const tag = createTag(group, elem, {
             VR,
             length: trueLength,
             rawValue: value,
-            value: _.join(_.map(value, (v) => {
-              return String.fromCharCode(v);
-            }), '')
-          })
+            value: convertValue(VR, tagInfo, isLittleEndian)
+          });
+          // eslint-disable-next-line functional/immutable-data
+          dataset[tag.representation] = tag;
         }
       }
       console.error('not implemented yet, readDataset explicitVR');
     }
-
   }
-};
 
-const _notGroup0002 = (group: number): boolean => {
-  return group !== 2;
+  return {
+    dataset,
+    newCursorPosition: cursor + cursorPositionChange
+  };
 };
 
 const _isImplicitVr = (
@@ -211,7 +214,7 @@ const _isImplicitVr = (
   }
 
   const foundImplicit = !(_.inRange(rawVR[0], 0x40, 0x5B) && (_.inRange(rawVR[1], 0x40, 0x5B)));
-  // console.log({ foundImplicit, isImplicitVRAssumed });
+
   if (foundImplicit !== isImplicitVRAssumed) {
     console.error('not implemented yet, foundImplicit !== isImplicitVrAssumed!', {
       tagBytes,
@@ -224,33 +227,113 @@ const _isImplicitVr = (
   return foundImplicit;
 };
 
+const _notGroup0000 = (group: number): boolean => {
+  return group !== 0;
+};
+
+const _notGroup0002 = (group: number): boolean => {
+  return group !== 2;
+};
+
 const readFileMetaInfo = (bytes: Uint8Array, cursor: number) => {
-  // const data = Uint8Helpers.splitArray(bytes, cursor)[1];
-  // console.log({ data });
-  const dataset = readDataset(bytes, cursor, false, true, _notGroup0002);
-  console.log({ dataset });
-  // const fileMeta = ;
-  // console.log({ dataset });
-  return '';
+  return readDataset(bytes, cursor, false, true, _notGroup0002);
+};
+
+const readCommandSetElements = (bytes: Uint8Array, cursor: number) => {
+  return readDataset(bytes, cursor, false, true, _notGroup0000);
+};
+
+const getPydicomLikeFileTagNotation = (fileMetaInfo: { [key: string]: ITag }) => {
+  const paddingLimit = 40;
+  map(fileMetaInfo, (tag) => {
+    console.log(` (${tag.representations.hexGroup}, ${tag.representations.hexElement}) ${join(take(tag.name, paddingLimit), '').padEnd(paddingLimit, ' ')} ${tag.VR}: ${tag.value}`);
+  });
+};
+
+// const guess
+console.log({ getPydicomLikeFileTagNotation });
+
+const readOrGuessIsImplicitVrAndIsLittleEndian = (bytes: Uint8Array, cursor: number, transferSyntax: ITag): {isImplicitVR: boolean, isLittleEndian: boolean} => {
+  const getReturnObject = (isImplicitVR?: boolean, isLittleEndian?: boolean) => {
+    return {
+      isImplicitVR: _.isUndefined(isImplicitVR) ? true : isImplicitVR,
+      isLittleEndian: _.isUndefined(isLittleEndian) ? true : isLittleEndian
+    }
+  }
+  const peek = Uint8Helpers.getArrayRange(bytes, cursor, 1);
+
+  if (peek.length === 0) {
+    return getReturnObject();
+  }
+
+  if (!transferSyntax) {
+    const data = Uint8Helpers.getArrayRange(bytes, cursor, 6);
+    const [group, _, VR] = Bufferpack.unpack('<HH2s', data);
+    if (converters[VR]) {
+      if (group >= 1024) {
+        return getReturnObject(false, false)
+      }
+      return getReturnObject(false, true);
+    }
+    return getReturnObject();
+  }
+
+  switch (transferSyntax.value) {
+    case KnownUIDs.ImplicitVRLittleEndian:
+      return getReturnObject();
+    case KnownUIDs.ExplicitVRLittleEndian:
+      return getReturnObject(false, true);
+    case KnownUIDs.ExplicitVRBigEndian:
+      return getReturnObject(false, false);
+    case KnownUIDs.DeflatedExplicitVRLittleEndian:
+      console.error('deflating zipped files not implemented yet');
+      break;
+    default:
+      return getReturnObject(false, true)
+  }
+
+  return getReturnObject();
 };
 
 const readFile = async (file: File) => {
   const extension = [...file.name.split('.')].pop();
-  console.log({ file, extension });
   const data = await file.arrayBuffer();
   const bytes = new Uint8Array(data);
 
-  const { preamble, cursor: cursorAfterPreamble } = readPreamble(bytes);
-  console.log({ preamble, cursorAfterPreamble });
-  // if (!preamble || !remainingBytes) {
-  //   return;
-  // }
+  const {
+    preamble,
+    newCursorPosition: cursorAfterPreamble
+  } = readPreamble(bytes);
+  const {
+    dataset: fileMetaInfo,
+    newCursorPosition: cursorAfterFileMeta
+  } = readFileMetaInfo(bytes, cursorAfterPreamble);
+  const {
+    dataset: commandSetElements,
+    newCursorPosition: datasetStart
+  } = readCommandSetElements(bytes, cursorAfterFileMeta);
 
-  const fileMetaInfo = readFileMetaInfo(bytes, cursorAfterPreamble);
-  console.log({ fileMetaInfo });
-  // const fileMetaInfo = readFileMetaInfo(remainingBytes);
+  const peek = Uint8Helpers.getArrayRange(bytes, datasetStart, 1);
 
-  // console.log({ preamble, file_meta_info: fileMetaInfo });
+  const transferSyntax = _.get(fileMetaInfo, '00020010'); // TransferSyntaxUID
+  console.log({transferSyntax});
+  const {isImplicitVR, isLittleEndian} = readOrGuessIsImplicitVrAndIsLittleEndian(bytes, datasetStart, transferSyntax);
+  console.log({
+    file,
+    extension,
+    preamble,
+    cursorAfterPreamble,
+    fileMetaInfo,
+    commandSetElements,
+    datasetStart,
+    peek,
+    isImplicitVR,
+    isLittleEndian,
+    transferSyntax,
+    readOrGuessIsImplicitVrAndIsLittleEndian
+  });
+  console.log({isImplicitVR, isLittleEndian});
+
 
 };
 
