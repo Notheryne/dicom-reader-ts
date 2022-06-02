@@ -3,12 +3,15 @@ import _ from 'lodash';
 
 import { ITagInfo } from '../types';
 
-import { decodeToText, getEndianCharacter } from './helpers';
+import {
+  decodeToText,
+  getEndianCharacter,
+  handleDA,
+  handleTM
+} from './helpers';
+import { getMultiString, handleMultiString } from './multi-string';
 
-const _getMultiString = (value: string) => {
-  const valueSplit = _.split(value, '\\');
-  return valueSplit.length === 1 ? valueSplit[0] : valueSplit;
-};
+
 
 const convertNumbers = (format: string) => (rawValue: Uint8Array, isLittleEndian: boolean) => {
   const endianCharacter = getEndianCharacter(isLittleEndian);
@@ -31,7 +34,7 @@ const convertNumbers = (format: string) => (rawValue: Uint8Array, isLittleEndian
 
 const convertUI = (rawValue: Uint8Array) => {
   const valueString = _.trimEnd(decodeToText(rawValue), '\0 ');
-  return _getMultiString(valueString);
+  return getMultiString(valueString);
 };
 
 const convertOB = (rawValue: Uint8Array) => {
@@ -40,11 +43,41 @@ const convertOB = (rawValue: Uint8Array) => {
 
 const convertText = (rawValue: Uint8Array) => {
   const value = decodeToText(rawValue);
-  return _getMultiString(value);
+  return getMultiString(value);
 };
 
-const notImplementedYet = (rawValue: Uint8Array) => {
-  console.error('not implemented yet, converted failed on', {rawValue})
+const convertString = (rawValue: Uint8Array) => {
+  const value = decodeToText(rawValue);
+  return getMultiString(value);
+}
+
+const convertDAString = (rawValue: Uint8Array) => {
+  const value = convertText(rawValue);
+  return handleMultiString(value, handleDA)
+}
+
+const convertTMString = (rawValue: Uint8Array) => {
+  const value = convertText(rawValue);
+  return handleMultiString(value, handleTM)
+}
+
+const convertPN = (rawValue: Uint8Array) => {
+  const value = _.trimEnd(decodeToText(rawValue), '\x00 ');
+  return getMultiString(value);
+}
+
+const convertISString = (rawValue: Uint8Array) => {
+  const value = decodeToText(rawValue);
+  return Number(value.trim())
+}
+
+const convertDSString = (rawValue: Uint8Array) => {
+  const value = decodeToText(rawValue);
+  return Number(value.trim());
+}
+
+const notImplementedYet = (rawValue: Uint8Array, isLittleEndian: boolean, VR: string) => {
+  console.error('not implemented yet, converted failed on', {rawValue, isLittleEndian, VR})
 }
 
 const converters: { [key: string]: CallableFunction } = {
@@ -59,30 +92,30 @@ const converters: { [key: string]: CallableFunction } = {
   UL: convertNumbers('L'),
   AE: notImplementedYet,
   OF: notImplementedYet,
-  AS: notImplementedYet,
+  AS: convertString,
   AT: notImplementedYet,
-  CS: notImplementedYet,
-  DA: notImplementedYet,
-  DS: notImplementedYet,
+  CS: convertString,
+  DA: convertDAString,
+  DS: convertDSString,
   DT: notImplementedYet,
-  FD: notImplementedYet,
-  FL: notImplementedYet,
-  IS: notImplementedYet,
+  FD: convertNumbers('d'),
+  FL: convertNumbers('f'),
+  IS: convertISString,
   LT: notImplementedYet,
   OV: notImplementedYet,
   OW: notImplementedYet,
-  PN: notImplementedYet,
-  SL: notImplementedYet,
+  PN: convertPN,
+  SL: convertNumbers('l'),
   SQ: notImplementedYet,
-  SS: notImplementedYet,
+  SS: convertNumbers('h'),
   ST: notImplementedYet,
-  SV: notImplementedYet,
-  TM: notImplementedYet,
+  SV: convertNumbers('q'),
+  TM: convertTMString,
   UN: notImplementedYet,
   UR: notImplementedYet,
-  US: notImplementedYet,
+  US: convertNumbers('H'),
   UT: notImplementedYet,
-  UV: notImplementedYet,
+  UV: convertNumbers('Q'),
   'US or OW': notImplementedYet,
   'US or SS or OW': notImplementedYet,
   'US or SS': notImplementedYet,
@@ -110,7 +143,7 @@ const convertValue = (VR: string, tagInfo: ITagInfo, isLittleEndian: boolean) =>
     return;
   }
 
-  return converter(tagInfo.rawValue, isLittleEndian);
+  return converter(tagInfo.rawValue, isLittleEndian, VR);
 };
 
 export { convertValue, converters };

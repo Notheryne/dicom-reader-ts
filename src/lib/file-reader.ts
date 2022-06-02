@@ -85,9 +85,14 @@ type ITag = ITagValues & {
   }
 }
 
-const createTag = (group: number, element: number, values: ITagValues): ITag => {
+const getHexRepresentation = (group: number, element: number) => {
   const hexGroup = join(takeRight(`0000${group.toString(16)}`, 4), '');
   const hexElement = join(takeRight(`0000${element.toString(16)}`, 4), '');
+  return {hexGroup, hexElement};
+}
+
+const createTag = (group: number, element: number, values: ITagValues): ITag => {
+  const {hexGroup, hexElement} = getHexRepresentation(group, element);
   const stringRepresentation = `${hexGroup}${hexElement}`;
   const dicomDictionaryEntry = DicomDictionary[stringRepresentation];
 
@@ -114,6 +119,28 @@ const createTag = (group: number, element: number, values: ITagValues): ITag => 
   };
 };
 
+const getTagInfo = (rawValue: Uint8Array, length: number, group?: number, element?: number, VR?: string): ITagInfo => {
+  if (!group && !element && !VR) {
+    // eslint-disable-next-line functional/no-throw-statement
+    throw Error();
+  }
+
+  if (VR) {
+    return {
+      rawValue,
+      length,
+      VR
+    }
+  }
+  const {hexGroup, hexElement} = getHexRepresentation(group!, element!);
+  // console.log({group, element, VR, hexGroup, hexElement, tag: `${hexGroup}${hexElement}`, tagDD: DicomDictionary[`${hexGroup}${hexElement}`]});
+  const guessVR = DicomDictionary[`${hexGroup}${hexElement}`][DicomDictionaryEntriesEnum.VR];
+  return {
+    rawValue,
+    length,
+    VR: guessVR
+  }
+}
 // const getTagValue = (VR: string, value: Uint8Array) => {
 //   const longVRs = ['OB', 'OD', 'OF', 'OW', 'UN', 'UT'];
 //   const numberVRs =
@@ -121,9 +148,9 @@ const createTag = (group: number, element: number, values: ITagValues): ITag => 
 // }
 
 
-const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boolean, isLittleEndian: boolean, stopWhen: StopWhenFunction) => {
+const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boolean, isLittleEndian: boolean, stopWhen?: StopWhenFunction) => {
   const data = Uint8Helpers.splitArray(bytes, cursor)[1];
-  const isImplicitVR = _isImplicitVr(bytes, cursor, isImplicitVRAssumed, isLittleEndian, stopWhen);
+  const isImplicitVR = _isImplicitVr(bytes, cursor, isImplicitVRAssumed, isLittleEndian, true, stopWhen);
 
   // // generator part
   const elementPattern = getEndianPattern(isLittleEndian, isImplicitVR);
@@ -132,11 +159,45 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
   const dataset: { [key: string]: ITag } = {};
   // eslint-disable-next-line functional/no-let
   let cursorPositionChange = 0;
+  const tagLength = 8;
 
   if (isImplicitVR) {
-    console.error('not implemented yet, readDataset implicitVR');
+    // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
+    while (true) {
+      const tagInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, tagLength);
+
+      if (tagInfo.length !== 8) {
+        break;
+      }
+      const [group, elem, length] = Bufferpack.unpack(elementPattern, tagInfo, 0);
+
+      if (_.isFunction(stopWhen)) {
+        if (stopWhen(group, undefined, length)) {
+          break;
+        }
+      }
+
+      cursorPositionChange += 8;
+      if (length !== parseInt('0xFFFFFFFF', 16)) {
+        if (length > 0) {
+          const value = Uint8Helpers.getArrayRange(data, cursorPositionChange, length);
+          cursorPositionChange += length;
+          const tagInfo = getTagInfo(value, length, group, elem);
+
+          const tag = createTag(group, elem, {
+            length,
+            rawValue: value,
+            value: convertValue(tagInfo.VR, tagInfo, isLittleEndian),
+          })
+          dataset[tag.representation] = tag;
+        } else {
+          console.log('len 0');
+        }
+      } else {
+        console.log('len 0 hex');
+      }
+    }
   } else {
-    const tagLength = 8;
     // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
     while (true) {
       const tagInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, tagLength);
@@ -168,11 +229,7 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
         if (trueLength > 0) {
           const value = Uint8Helpers.getArrayRange(data, cursorPositionChange, trueLength);
           cursorPositionChange += trueLength;
-          const tagInfo: ITagInfo = {
-            VR,
-            length: trueLength,
-            rawValue: value
-          };
+          const tagInfo: ITagInfo = getTagInfo(value, length, group, elem, VR);
 
           const tag = createTag(group, elem, {
             VR,
@@ -199,8 +256,8 @@ const _isImplicitVr = (
   cursor: number,
   isImplicitVRAssumed = true,
   isLittleEndian = true,
-  stopWhen: StopWhenFunction,
-  isSequence = true
+  isSequence = true,
+stopWhen?: StopWhenFunction,
 ): boolean => {
   if (isSequence && isImplicitVRAssumed) {
     return true;
@@ -268,7 +325,8 @@ const readOrGuessIsImplicitVrAndIsLittleEndian = (bytes: Uint8Array, cursor: num
 
   if (!transferSyntax) {
     const data = Uint8Helpers.getArrayRange(bytes, cursor, 6);
-    const [group, _, VR] = Bufferpack.unpack('<HH2s', data);
+    const [group, something, VR] = Bufferpack.unpack('<HH2s', data);
+    console.log({something});
     if (converters[VR]) {
       if (group >= 1024) {
         return getReturnObject(false, false)
@@ -332,7 +390,9 @@ const readFile = async (file: File) => {
     transferSyntax,
     readOrGuessIsImplicitVrAndIsLittleEndian
   });
-  console.log({isImplicitVR, isLittleEndian});
+  console.log("@@@@@ READING DATASET @@@@@@")
+  const {dataset, newCursorPosition} = readDataset(bytes, datasetStart, isImplicitVR, isLittleEndian,)
+  console.log({isImplicitVR, isLittleEndian, dataset, newCursorPosition});
 
 
 };
