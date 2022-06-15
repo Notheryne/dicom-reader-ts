@@ -1,27 +1,29 @@
 import Bufferpack from 'bufferpack';
-// import { gdcm } from 'gdcmconv';
 import _, {
-  find, floor, includes,
+  find,
+  floor,
   isArray,
-  isEqual, isNumber, isString,
-  join, keys,
+  isEqual,
+  isNumber,
+  isString,
+  join,
   map,
   omit,
   take,
-  takeRight, toLower
+  takeRight,
+  toLower,
 } from 'lodash';
 
 import {
   Constants,
   DicomDictionary,
   DicomDictionaryEntriesEnum,
-  ExtraLengthVRs, KnownUIDs
+  ExtraLengthVRs,
+  KnownUIDs,
 } from '../constants/index';
 import { ITagInfo } from '../types';
 
 import { converters, convertValue } from './converter';
-
-
 import { getEndianCharacter, getEndianPattern } from './helpers';
 
 const print = console.log;
@@ -32,11 +34,21 @@ const Uint8Helpers = {
     return _.map(bytes, (byte) => byte.toString(16).padStart(2, '0'));
   },
 
-  splitArray: (array: Uint8Array, firstArrayElements: number): readonly [Uint8Array, Uint8Array] => {
-    return [array.slice(0, firstArrayElements), array.slice(firstArrayElements)];
+  splitArray: (
+    array: Uint8Array,
+    firstArrayElements: number
+  ): readonly [Uint8Array, Uint8Array] => {
+    return [
+      array.slice(0, firstArrayElements),
+      array.slice(firstArrayElements),
+    ];
   },
 
-  getArrayRange: (array: Uint8Array, start: number, range: number): Uint8Array => {
+  getArrayRange: (
+    array: Uint8Array,
+    start: number,
+    range: number
+  ): Uint8Array => {
     return array.slice(start, start + range);
   },
 
@@ -44,7 +56,7 @@ const Uint8Helpers = {
     return _.map(array, (byte) => {
       return String.fromCharCode(byte);
     }).join('');
-  }
+  },
 };
 
 // const DicomHelpers = {
@@ -58,10 +70,12 @@ const Uint8Helpers = {
 //   }
 // };
 
-
 const readPreamble = (bytes: Uint8Array) => {
   const [fileMetaInformationHeader] = Uint8Helpers.splitArray(bytes, 132);
-  const [preamble, magic] = Uint8Helpers.splitArray(fileMetaInformationHeader, 128);
+  const [preamble, magic] = Uint8Helpers.splitArray(
+    fileMetaInformationHeader,
+    128
+  );
   const magicAsText = Uint8Helpers.arrayToText(magic);
   if (magicAsText !== Constants.DICOM_MAGIC_PREFIX) {
     console.error(Constants.ERRORS.MISSING_DICOM_FILE_META_INFORMATION_HEADER);
@@ -70,35 +84,39 @@ const readPreamble = (bytes: Uint8Array) => {
   return { preamble, newCursorPosition: 132 };
 };
 
-type StopWhenFunction = (group: number, VR?: string, length?: number) => boolean;
+type StopWhenFunction = (
+  group: number,
+  VR?: string,
+  length?: number
+) => boolean;
 
 type IKnownTagValues<T> = {
-  readonly VR: string,
-  readonly length: number,
-  readonly rawValue: Uint8Array,
-  readonly value: T,
-}
+  readonly VR: string;
+  readonly length: number;
+  readonly rawValue: Uint8Array;
+  readonly value: T;
+};
 
 type ITagValues<T> = IKnownTagValues<T> & {
-  readonly [key: string]: unknown,
+  readonly [key: string]: unknown;
 };
 
 type ITag<T> = ITagValues<T> & {
-  name: string,
-  readonly representation: string,
+  name: string;
+  readonly representation: string;
   readonly representations: {
-    group: number,
-    element: number,
-    hexGroup: string,
-    hexElement: string,
-    tuple: readonly string[],
-    string: string,
-    name: string,
-  },
+    group: number;
+    element: number;
+    hexGroup: string;
+    hexElement: string;
+    tuple: readonly string[];
+    string: string;
+    name: string;
+  };
   keyword: string;
-}
+};
 
-type Dataset = Record<string, ITag<any>>
+type Dataset = Record<string, ITag<any>>;
 
 const getHexRepresentation = (group: number, element: number) => {
   const hexGroup = join(takeRight(`0000${group.toString(16)}`, 4), '');
@@ -106,7 +124,11 @@ const getHexRepresentation = (group: number, element: number) => {
   return { hexGroup, hexElement };
 };
 
-const createTag = (group: number, element: number, values: ITagValues<any>): ITag<any> => {
+const createTag = (
+  group: number,
+  element: number,
+  values: ITagValues<any>
+): ITag<any> => {
   const { hexGroup, hexElement } = getHexRepresentation(group, element);
   const stringRepresentation = `${hexGroup}${hexElement}`;
   const dicomDictionaryEntry = DicomDictionary[stringRepresentation];
@@ -118,7 +140,7 @@ const createTag = (group: number, element: number, values: ITagValues<any>): ITa
     hexElement,
     tuple: [hexGroup, hexElement],
     string: stringRepresentation,
-    name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name]
+    name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name],
   };
 
   return {
@@ -129,11 +151,17 @@ const createTag = (group: number, element: number, values: ITagValues<any>): ITa
     name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name],
     VM: dicomDictionaryEntry[DicomDictionaryEntriesEnum.VM],
     keyword: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Keyword],
-    retired: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Retired]
+    retired: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Retired],
   } as ITag<typeof values.value>;
 };
 
-const getTagInfo = (rawValue: Uint8Array, length: number, group?: number, element?: number, VR?: string): ITagInfo => {
+const getTagInfo = (
+  rawValue: Uint8Array,
+  length: number,
+  group?: number,
+  element?: number,
+  VR?: string
+): ITagInfo => {
   if (!group && !element && !VR) {
     // eslint-disable-next-line functional/no-throw-statement
     throw Error();
@@ -143,16 +171,17 @@ const getTagInfo = (rawValue: Uint8Array, length: number, group?: number, elemen
     return {
       rawValue,
       length,
-      VR
+      VR,
     };
   }
   const { hexGroup, hexElement } = getHexRepresentation(group!, element!);
   // console.log({group, element, VR, hexGroup, hexElement, tag: `${hexGroup}${hexElement}`, tagDD: DicomDictionary[`${hexGroup}${hexElement}`]});
-  const guessVR = DicomDictionary[`${hexGroup}${hexElement}`][DicomDictionaryEntriesEnum.VR];
+  const guessVR =
+    DicomDictionary[`${hexGroup}${hexElement}`][DicomDictionaryEntriesEnum.VR];
   return {
     rawValue,
     length,
-    VR: guessVR
+    VR: guessVR,
   };
 };
 // const getTagValue = (VR: string, value: Uint8Array) => {
@@ -161,10 +190,22 @@ const getTagInfo = (rawValue: Uint8Array, length: number, group?: number, elemen
 //   const stringVRs = []
 // }
 
-
-const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boolean, isLittleEndian: boolean, stopWhen?: StopWhenFunction) => {
+const readDataset = (
+  bytes: Uint8Array,
+  cursor: number,
+  isImplicitVRAssumed: boolean,
+  isLittleEndian: boolean,
+  stopWhen?: StopWhenFunction
+) => {
   const data = Uint8Helpers.splitArray(bytes, cursor)[1];
-  const isImplicitVR = _isImplicitVr(bytes, cursor, isImplicitVRAssumed, isLittleEndian, true, stopWhen);
+  const isImplicitVR = _isImplicitVr(
+    bytes,
+    cursor,
+    isImplicitVRAssumed,
+    isLittleEndian,
+    true,
+    stopWhen
+  );
 
   // // generator part
   const elementPattern = getEndianPattern(isLittleEndian, isImplicitVR);
@@ -178,12 +219,20 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
   if (isImplicitVR) {
     // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
     while (true) {
-      const tagInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, tagLength);
+      const tagInfo = Uint8Helpers.getArrayRange(
+        data,
+        cursorPositionChange,
+        tagLength
+      );
 
       if (tagInfo.length !== 8) {
         break;
       }
-      const [group, elem, length] = Bufferpack.unpack(elementPattern, tagInfo, 0);
+      const [group, elem, length] = Bufferpack.unpack(
+        elementPattern,
+        tagInfo,
+        0
+      );
 
       if (_.isFunction(stopWhen)) {
         if (stopWhen(group, undefined, length)) {
@@ -194,7 +243,11 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
       cursorPositionChange += 8;
       if (length !== parseInt('0xFFFFFFFF', 16)) {
         if (length > 0) {
-          const value = Uint8Helpers.getArrayRange(data, cursorPositionChange, length);
+          const value = Uint8Helpers.getArrayRange(
+            data,
+            cursorPositionChange,
+            length
+          );
           cursorPositionChange += length;
           const tagInfo = getTagInfo(value, length, group, elem);
 
@@ -202,7 +255,7 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
             length,
             rawValue: value,
             value: convertValue(tagInfo.VR, tagInfo, isLittleEndian),
-            VR: ''
+            VR: '',
           });
           dataset[tag.representation] = tag;
         } else {
@@ -215,11 +268,19 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
   } else {
     // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
     while (true) {
-      const tagInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, tagLength);
+      const tagInfo = Uint8Helpers.getArrayRange(
+        data,
+        cursorPositionChange,
+        tagLength
+      );
       if (tagInfo.length !== 8) {
         break;
       }
-      const [group, elem, VR, length] = Bufferpack.unpack(elementPattern, tagInfo, 0);
+      const [group, elem, VR, length] = Bufferpack.unpack(
+        elementPattern,
+        tagInfo,
+        0
+      );
 
       if (_.isFunction(stopWhen)) {
         if (stopWhen(group, VR.toString(), length)) {
@@ -233,8 +294,16 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
 
       if (_.includes(ExtraLengthVRs, VR)) {
         const extraLength = 4;
-        const extraLengthInfo = Uint8Helpers.getArrayRange(data, cursorPositionChange, extraLength);
-        const extraLengthUnpacked = Bufferpack.unpack(extraLengthPattern, extraLengthInfo, 0);
+        const extraLengthInfo = Uint8Helpers.getArrayRange(
+          data,
+          cursorPositionChange,
+          extraLength
+        );
+        const extraLengthUnpacked = Bufferpack.unpack(
+          extraLengthPattern,
+          extraLengthInfo,
+          0
+        );
         trueLength = extraLengthUnpacked[0];
         cursorPositionChange += extraLength;
       }
@@ -242,7 +311,11 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
       // reading values!
       if (trueLength !== parseInt('0xFFFFFFFF', 16)) {
         if (trueLength > 0) {
-          const value = Uint8Helpers.getArrayRange(data, cursorPositionChange, trueLength);
+          const value = Uint8Helpers.getArrayRange(
+            data,
+            cursorPositionChange,
+            trueLength
+          );
           cursorPositionChange += trueLength;
           const tagInfo: ITagInfo = getTagInfo(value, length, group, elem, VR);
 
@@ -250,7 +323,7 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
             VR,
             length: trueLength,
             rawValue: value,
-            value: convertValue(VR, tagInfo, isLittleEndian)
+            value: convertValue(VR, tagInfo, isLittleEndian),
           });
           // eslint-disable-next-line functional/immutable-data
           dataset[tag.representation] = tag;
@@ -262,7 +335,7 @@ const readDataset = (bytes: Uint8Array, cursor: number, isImplicitVRAssumed: boo
 
   return {
     dataset,
-    newCursorPosition: cursor + cursorPositionChange
+    newCursorPosition: cursor + cursorPositionChange,
   };
 };
 
@@ -285,16 +358,21 @@ const _isImplicitVr = (
     return isImplicitVRAssumed;
   }
 
-  const foundImplicit = !(_.inRange(rawVR[0], 0x40, 0x5B) && (_.inRange(rawVR[1], 0x40, 0x5B)));
+  const foundImplicit = !(
+    _.inRange(rawVR[0], 0x40, 0x5b) && _.inRange(rawVR[1], 0x40, 0x5b)
+  );
 
   if (foundImplicit !== isImplicitVRAssumed) {
-    console.error('not implemented yet, foundImplicit !== isImplicitVrAssumed!', {
-      tagBytes,
-      foundImplicit,
-      isImplicitVRAssumed,
-      stopWhen,
-      isLittleEndian
-    });
+    console.error(
+      'not implemented yet, foundImplicit !== isImplicitVrAssumed!',
+      {
+        tagBytes,
+        foundImplicit,
+        isImplicitVRAssumed,
+        stopWhen,
+        isLittleEndian,
+      }
+    );
   }
   return foundImplicit;
 };
@@ -315,21 +393,37 @@ const readCommandSetElements = (bytes: Uint8Array, cursor: number) => {
   return readDataset(bytes, cursor, false, true, _notGroup0000);
 };
 
-const getPydicomLikeFileTagNotation = (dataset: Dataset, skip = ['7fe00010']) => {
+const getPydicomLikeFileTagNotation = (
+  dataset: Dataset,
+  skip = ['7fe00010']
+) => {
   const paddingLimit = 40;
   map(omit(dataset, ...skip), (tag: ITag<any>) => {
-    console.log(` (${tag.representations.hexGroup}, ${tag.representations.hexElement}) ${join(take(tag.name, paddingLimit), '').padEnd(paddingLimit, ' ')} ${tag.VR}: ${tag.value}`);
+    console.log(
+      ` (${tag.representations.hexGroup}, ${
+        tag.representations.hexElement
+      }) ${join(take(tag.name, paddingLimit), '').padEnd(paddingLimit, ' ')} ${
+        tag.VR
+      }: ${tag.value}`
+    );
   });
 };
 
 // const guess
 console.log({ getPydicomLikeFileTagNotation });
 
-const readOrGuessIsImplicitVrAndIsLittleEndian = (bytes: Uint8Array, cursor: number, transferSyntax: ITag<string>): { isImplicitVR: boolean, isLittleEndian: boolean } => {
-  const getReturnObject = (isImplicitVR?: boolean, isLittleEndian?: boolean) => {
+const readOrGuessIsImplicitVrAndIsLittleEndian = (
+  bytes: Uint8Array,
+  cursor: number,
+  transferSyntax: ITag<string>
+): { isImplicitVR: boolean; isLittleEndian: boolean } => {
+  const getReturnObject = (
+    isImplicitVR?: boolean,
+    isLittleEndian?: boolean
+  ) => {
     return {
       isImplicitVR: _.isUndefined(isImplicitVR) ? true : isImplicitVR,
-      isLittleEndian: _.isUndefined(isLittleEndian) ? true : isLittleEndian
+      isLittleEndian: _.isUndefined(isLittleEndian) ? true : isLittleEndian,
     };
   };
   const peek = Uint8Helpers.getArrayRange(bytes, cursor, 1);
@@ -368,27 +462,45 @@ const readOrGuessIsImplicitVrAndIsLittleEndian = (bytes: Uint8Array, cursor: num
   return getReturnObject();
 };
 
-const getMatchedTag = (representation: string | (number | string)[], tag: ITag<any>) => {
+const getMatchedTag = (
+  representation: string | (number | string)[],
+  tag: ITag<any>
+) => {
   if (isArray(representation)) {
     if (isNumber(representation[0])) {
       const { group, element } = tag.representations;
       return isEqual([group, element], representation);
     } else if (isString(representation[0])) {
-      return isEqual(map(tag.representations.tuple, toLower), map(representation, toLower));
+      return isEqual(
+        map(tag.representations.tuple, toLower),
+        map(representation, toLower)
+      );
     }
   } else {
-    if (toLower(tag.name) === toLower(representation) || toLower(tag.keyword) === toLower(representation)) {
+    if (
+      toLower(tag.name) === toLower(representation) ||
+      toLower(tag.keyword) === toLower(representation)
+    ) {
       return true;
     }
-    const transformedRepresentation = toLower(representation).replace(/(\(|,|\s)/g, '');
+    const transformedRepresentation = toLower(representation).replace(
+      /(\(|,|\s)/g,
+      ''
+    );
     return isEqual(toLower(tag.representation), transformedRepresentation);
   }
   return false;
 };
 
-const getTagValue = (dataset: Dataset, representation: string | (number | string)[]) => {
+const getTagValue = (
+  dataset: Dataset,
+  representation: string | (number | string)[]
+) => {
   if (isArray(representation) && representation.length !== 2) {
-    console.error('Wrong tag identifier supplied. If passed as a tuple it must have 2 elements', { tag: representation });
+    console.error(
+      'Wrong tag identifier supplied. If passed as a tuple it must have 2 elements',
+      { tag: representation }
+    );
     return null;
   }
 
@@ -397,45 +509,66 @@ const getTagValue = (dataset: Dataset, representation: string | (number | string
   });
 };
 
-const getExpectedLength = (rows: number, columns: number, samplesPerPixel: number, bitsAllocated: number, photometricInterpretation: string, unit = 'bytes') => {
-  const baseLength = rows * columns * samplesPerPixel;// * number of frames (?)
+const getExpectedLength = (
+  rows: number,
+  columns: number,
+  samplesPerPixel: number,
+  bitsAllocated: number,
+  photometricInterpretation: string,
+  unit = 'bytes'
+) => {
+  const baseLength = rows * columns * samplesPerPixel; // * number of frames (?)
   if (unit === 'pixels') {
     return baseLength;
   }
 
-  const bytesNeeded = bitsAllocated === 1 ? floor(baseLength / 8) + (baseLength % 8 === 0 ? 0 : 1) : baseLength * floor(bitsAllocated / 8);
+  const bytesNeeded =
+    bitsAllocated === 1
+      ? floor(baseLength / 8) + (baseLength % 8 === 0 ? 0 : 1)
+      : baseLength * floor(bitsAllocated / 8);
   if (photometricInterpretation === 'YBR_FULL_422') {
     return floor(bytesNeeded / 3) * 2;
   }
   return bytesNeeded;
 };
 
-
-const getPixelTypeConstructor = (bitsAllocated: number, pixelRepresentation: number, isLittleEndian = true) => {
+const getPixelTypeConstructor = (
+  bitsAllocated: number,
+  pixelRepresentation: number,
+  isLittleEndian = true
+) => {
   if (bitsAllocated < 0 || bitsAllocated !== 1 || bitsAllocated % 8 !== 0) {
-    console.error('Cant get pixel type', {bitsAllocated, pixelRepresentation, isLittleEndian});
+    console.error('Cant get pixel type', {
+      bitsAllocated,
+      pixelRepresentation,
+      isLittleEndian,
+    });
   }
-  const representations: {[key: number]: string} = {
+  const representations: { [key: number]: string } = {
     0: 'uint',
-    1: 'int'
-  }
-  const typeName = bitsAllocated === 1
-    ? 'uint8'
-    : `${representations[pixelRepresentation]}${bitsAllocated}`
+    1: 'int',
+  };
+  const typeName =
+    bitsAllocated === 1
+      ? 'uint8'
+      : `${representations[pixelRepresentation]}${bitsAllocated}`;
 
-  const types: {[key: string]: TypedArrayConstructor} = {
-    'uint8': Uint8Array,
-    'uint16': Uint16Array,
-    'int8': Int8Array,
-    'int16': Int16Array
-  }
+  const types: { [key: string]: TypedArrayConstructor } = {
+    uint8: Uint8Array,
+    uint16: Uint16Array,
+    int8: Int8Array,
+    int16: Int16Array,
+  };
 
   return types[typeName];
 };
 
-const convertPixelDataToType = (pixelData: Uint8Array, pixelTypeConstructor: TypedArrayConstructor) => {
+const convertPixelDataToType = (
+  pixelData: Uint8Array,
+  pixelTypeConstructor: TypedArrayConstructor
+) => {
   return new pixelTypeConstructor(pixelData.buffer);
-}
+};
 
 const convertPixelData = (dataset: Dataset, isLittleEndian = true) => {
   console.log({ dataset });
@@ -453,27 +586,70 @@ const convertPixelData = (dataset: Dataset, isLittleEndian = true) => {
   const photometricInterpretation = getTagValue(dataset, '00280004');
   const pixelRepresentation = getTagValue(dataset, '00280103');
 
-  const [pixelData, pixelDataKeyword] = [defaultPixelData, 'PixelData'] || [floatPixelData, 'FloatPixelData'] || [doubleFloatPixelData, 'DoubleFloatPixelData'];
+  const [pixelData, pixelDataKeyword] = [defaultPixelData, 'PixelData'] || [
+      floatPixelData,
+      'FloatPixelData',
+    ] || [doubleFloatPixelData, 'DoubleFloatPixelData'];
 
-  if (!transferSyntaxUid || !pixelData || !bitsAllocated || !bitsStored || !highBit || !rows || !columns || !samplesPerPixel || !photometricInterpretation || !pixelDataKeyword || !pixelRepresentation) {
+  if (
+    !transferSyntaxUid ||
+    !pixelData ||
+    !bitsAllocated ||
+    !bitsStored ||
+    !highBit ||
+    !rows ||
+    !columns ||
+    !samplesPerPixel ||
+    !photometricInterpretation ||
+    !pixelDataKeyword ||
+    !pixelRepresentation
+  ) {
     return;
   }
 
-  const expectedLength = getExpectedLength(rows.value, columns.value, samplesPerPixel.value, bitsAllocated.value, photometricInterpretation.value);
+  const expectedLength = getExpectedLength(
+    rows.value,
+    columns.value,
+    samplesPerPixel.value,
+    bitsAllocated.value,
+    photometricInterpretation.value
+  );
   const actualLength = pixelData.length;
-  const paddedExpectedLength = expectedLength + expectedLength % 2;
+  const paddedExpectedLength = expectedLength + (expectedLength % 2);
   console.log({ expectedLength, actualLength, paddedExpectedLength });
 
   if (bitsAllocated.value === 1) {
-    const numberOfPixels = getExpectedLength(rows.value, columns.value, samplesPerPixel.value, bitsAllocated.value, photometricInterpretation.value, 'pixels');
-    console.error('Not implemented yet, bitAllocated === 1.', { numberOfPixels });
+    const numberOfPixels = getExpectedLength(
+      rows.value,
+      columns.value,
+      samplesPerPixel.value,
+      bitsAllocated.value,
+      photometricInterpretation.value,
+      'pixels'
+    );
+    console.error('Not implemented yet, bitAllocated === 1.', {
+      numberOfPixels,
+    });
   } else {
-    const data = Uint8Helpers.getArrayRange(pixelData.rawValue, 0, expectedLength);
+    const data = Uint8Helpers.getArrayRange(
+      pixelData.rawValue,
+      0,
+      expectedLength
+    );
     if (photometricInterpretation.value === 'YBR_FULL_422') {
-      console.error('not implemented yet, photometricInterpretation === YBR_FULL_422');
+      console.error(
+        'not implemented yet, photometricInterpretation === YBR_FULL_422'
+      );
     }
-    const pixelTypeConstructor = getPixelTypeConstructor(bitsAllocated.value, pixelRepresentation.value, isLittleEndian);
-    console.log({ data, new: convertPixelDataToType(data, pixelTypeConstructor) });
+    const pixelTypeConstructor = getPixelTypeConstructor(
+      bitsAllocated.value,
+      pixelRepresentation.value,
+      isLittleEndian
+    );
+    console.log({
+      data,
+      new: convertPixelDataToType(data, pixelTypeConstructor),
+    });
   }
 };
 
@@ -482,27 +658,23 @@ const readFile = async (file: File) => {
   const data = await file.arrayBuffer();
   const bytes = new Uint8Array(data);
 
-  const {
-    preamble,
-    newCursorPosition: cursorAfterPreamble
-  } = readPreamble(bytes);
-  const {
-    dataset: fileMetaInfo,
-    newCursorPosition: cursorAfterFileMeta
-  } = readFileMetaInfo(bytes, cursorAfterPreamble);
-  const {
-    dataset: commandSetElements,
-    newCursorPosition: datasetStart
-  } = readCommandSetElements(bytes, cursorAfterFileMeta);
+  const { preamble, newCursorPosition: cursorAfterPreamble } =
+    readPreamble(bytes);
+  const { dataset: fileMetaInfo, newCursorPosition: cursorAfterFileMeta } =
+    readFileMetaInfo(bytes, cursorAfterPreamble);
+  const { dataset: commandSetElements, newCursorPosition: datasetStart } =
+    readCommandSetElements(bytes, cursorAfterFileMeta);
 
   const peek = Uint8Helpers.getArrayRange(bytes, datasetStart, 1);
 
   const transferSyntax = _.get(fileMetaInfo, '00020010'); // TransferSyntaxUID
   console.log({ transferSyntax });
-  const {
-    isImplicitVR,
-    isLittleEndian
-  } = readOrGuessIsImplicitVrAndIsLittleEndian(bytes, datasetStart, transferSyntax);
+  const { isImplicitVR, isLittleEndian } =
+    readOrGuessIsImplicitVrAndIsLittleEndian(
+      bytes,
+      datasetStart,
+      transferSyntax
+    );
   console.log({
     file,
     extension,
@@ -515,14 +687,19 @@ const readFile = async (file: File) => {
     isImplicitVR,
     isLittleEndian,
     transferSyntax,
-    readOrGuessIsImplicitVrAndIsLittleEndian
+    readOrGuessIsImplicitVrAndIsLittleEndian,
   });
   console.log('@@@@@ READING DATASET @@@@@@');
-  const { dataset } = readDataset(bytes, datasetStart, isImplicitVR, isLittleEndian);
+  const { dataset } = readDataset(
+    bytes,
+    datasetStart,
+    isImplicitVR,
+    isLittleEndian
+  );
   const fullDataset = {
     ...dataset,
     ...fileMetaInfo,
-    ...commandSetElements
+    ...commandSetElements,
   };
   convertPixelData(fullDataset, isLittleEndian);
 
