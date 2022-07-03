@@ -1,17 +1,28 @@
 import Bufferpack from 'bufferpack';
 import _, {
+  ceil,
+  chunk,
+  filter,
   find,
-  floor,
   isArray,
   isEqual,
   isNumber,
+  isObject,
   isString,
   join,
   map,
+  max,
+  min,
   omit,
+  padStart,
+  parseInt,
+  reduce,
+  reverse,
+  startsWith,
   take,
   takeRight,
   toLower,
+  toUpper,
 } from 'lodash';
 
 import {
@@ -117,6 +128,10 @@ type ITag<T> = ITagValues<T> & {
 };
 
 type Dataset = Record<string, ITag<any>>;
+type FullDataset = Dataset & {
+  isLittleEndian: boolean;
+  isImplicitVR: boolean;
+};
 
 const getHexRepresentation = (group: number, element: number) => {
   const hexGroup = join(takeRight(`0000${group.toString(16)}`, 4), '');
@@ -257,6 +272,7 @@ const readDataset = (
             value: convertValue(tagInfo.VR, tagInfo, isLittleEndian),
             VR: '',
           });
+
           dataset[tag.representation] = tag;
         } else {
           console.log('len 0');
@@ -509,148 +525,144 @@ const getTagValue = (
   });
 };
 
-const getExpectedLength = (
-  rows: number,
-  columns: number,
-  samplesPerPixel: number,
-  bitsAllocated: number,
-  photometricInterpretation: string,
-  unit = 'bytes'
-) => {
-  const baseLength = rows * columns * samplesPerPixel; // * number of frames (?)
-  if (unit === 'pixels') {
-    return baseLength;
-  }
-
-  const bytesNeeded =
-    bitsAllocated === 1
-      ? floor(baseLength / 8) + (baseLength % 8 === 0 ? 0 : 1)
-      : baseLength * floor(bitsAllocated / 8);
-  if (photometricInterpretation === 'YBR_FULL_422') {
-    return floor(bytesNeeded / 3) * 2;
-  }
-  return bytesNeeded;
+const getTagsGroup = (dataset: Dataset, group: string) => {
+  return reduce(
+    filter(dataset, (tag) => {
+      return isObject(tag) && tag.representations.hexGroup === group;
+    }),
+    (acc, tag) => {
+      const tagName = `${tag.keyword[0].toLowerCase()}${tag.keyword.slice(1)}`;
+      return { ...acc, [tagName]: tag };
+    },
+    {} as Dataset
+  );
 };
 
-const getPixelTypeConstructor = (
-  bitsAllocated: number,
-  pixelRepresentation: number,
-  isLittleEndian = true
-) => {
-  if (bitsAllocated < 0 || bitsAllocated !== 1 || bitsAllocated % 8 !== 0) {
-    console.error('Cant get pixel type', {
-      bitsAllocated,
-      pixelRepresentation,
-      isLittleEndian,
-    });
+const littleEndianToBigEndian = (hex: string) => {
+  if (hex.length > 2) {
+    return join(reverse(map(chunk(hex, 2), (c) => join(c, ''))), '');
   }
-  const representations: { [key: number]: string } = {
-    0: 'uint',
-    1: 'int',
-  };
-  const typeName =
-    bitsAllocated === 1
-      ? 'uint8'
-      : `${representations[pixelRepresentation]}${bitsAllocated}`;
-
-  const types: { [key: string]: TypedArrayConstructor } = {
-    uint8: Uint8Array,
-    uint16: Uint16Array,
-    int8: Int8Array,
-    int16: Int16Array,
-  };
-
-  return types[typeName];
+  return hex;
 };
 
-const convertPixelDataToType = (
-  pixelData: Uint8Array,
-  pixelTypeConstructor: TypedArrayConstructor
+const pixelDataToSignedInt = (data: string[]) => {
+  return map(data, (num: string) => {
+    const bits = parseInt(num, 16).toString(2);
+
+    if (startsWith(bits, '1') && bits.length === 16) {
+      const numberAfterXor = parseInt(
+        join(
+          map(bits, (b) => (b === '0' ? '1' : '0')),
+          ''
+        ),
+        2
+      );
+
+      const value = -(numberAfterXor + 1);
+      return value === 0 ? -32768 : value;
+    }
+    return parseInt(bits, 2);
+  });
+};
+
+const numberToHex = (i: number) => {
+  return ('0' + i.toString(16)).slice(-2);
+};
+
+const adjustToWindow = (
+  pixelData: number[],
+  windowCenter?: ITag<number>,
+  windowWidth?: ITag<number>
 ) => {
-  return new pixelTypeConstructor(pixelData.buffer);
+  const safeWindowCenter =
+    windowCenter && windowCenter.value ? windowCenter.value : 610;
+  const safeWindowWidth =
+    windowWidth && windowWidth.value ? windowWidth.value : 1221;
+
+  const minPixelValue = safeWindowCenter - safeWindowWidth / 2;
+  const maxPixelValue = safeWindowCenter + safeWindowWidth / 2;
+  const scalingFactor =
+    255 / (Math.abs(minPixelValue) + Math.abs(maxPixelValue));
+
+  return map(pixelData, (value: number) => {
+    const valueInRange = min([max([value, minPixelValue]), maxPixelValue])!;
+    const positiveValue =
+      minPixelValue < 0 ? valueInRange + Math.abs(minPixelValue) : valueInRange;
+    return Math.floor(positiveValue * scalingFactor);
+  });
 };
 
-const convertPixelData = (dataset: Dataset, isLittleEndian = true) => {
-  console.log({ dataset });
-  // getPydicomLikeFileTagNotation(dataset);
-  const transferSyntaxUid = getTagValue(dataset, 'TransferSyntaxUID');
-  const defaultPixelData = getTagValue(dataset, 'Pixel Data');
-  const floatPixelData = getTagValue(dataset, 'FloatPixelData');
-  const doubleFloatPixelData = getTagValue(dataset, 'DoubleFloatPixelData');
-  const bitsAllocated = getTagValue(dataset, '00280100');
-  const bitsStored = getTagValue(dataset, '00280101');
-  const highBit = getTagValue(dataset, '00280102');
-  const rows = getTagValue(dataset, '00280010');
-  const columns = getTagValue(dataset, '00280011');
-  const samplesPerPixel = getTagValue(dataset, '00280002');
-  const photometricInterpretation = getTagValue(dataset, '00280004');
-  const pixelRepresentation = getTagValue(dataset, '00280103');
+const getPixelData = (dataset: Dataset) => {
+  const {
+    bitsAllocated,
+    bitsStored,
+    highBit,
+    photometricInterpretation,
+    pixelRepresentation,
+    rescaleIntercept,
+    rescaleSlope,
+    windowCenter,
+    windowWidth,
+  } = getTagsGroup(dataset, '0028');
+  const pixelData = getTagValue(dataset, 'Pixel Data');
 
-  const [pixelData, pixelDataKeyword] = [defaultPixelData, 'PixelData'] || [
-      floatPixelData,
-      'FloatPixelData',
-    ] || [doubleFloatPixelData, 'DoubleFloatPixelData'];
-
-  if (
-    !transferSyntaxUid ||
-    !pixelData ||
-    !bitsAllocated ||
-    !bitsStored ||
-    !highBit ||
-    !rows ||
-    !columns ||
-    !samplesPerPixel ||
-    !photometricInterpretation ||
-    !pixelDataKeyword ||
-    !pixelRepresentation
-  ) {
+  if (!pixelData) {
     return;
   }
+  const hexAllocated = ceil(bitsAllocated.value / 8) * 2;
 
-  const expectedLength = getExpectedLength(
-    rows.value,
-    columns.value,
-    samplesPerPixel.value,
-    bitsAllocated.value,
-    photometricInterpretation.value
-  );
-  const actualLength = pixelData.length;
-  const paddedExpectedLength = expectedLength + (expectedLength % 2);
-  console.log({ expectedLength, actualLength, paddedExpectedLength });
-
-  if (bitsAllocated.value === 1) {
-    const numberOfPixels = getExpectedLength(
-      rows.value,
-      columns.value,
-      samplesPerPixel.value,
-      bitsAllocated.value,
-      photometricInterpretation.value,
-      'pixels'
-    );
-    console.error('Not implemented yet, bitAllocated === 1.', {
-      numberOfPixels,
-    });
-  } else {
-    const data = Uint8Helpers.getArrayRange(
-      pixelData.rawValue,
-      0,
-      expectedLength
-    );
-    if (photometricInterpretation.value === 'YBR_FULL_422') {
-      console.error(
-        'not implemented yet, photometricInterpretation === YBR_FULL_422'
-      );
+  const pixelDataHexString = map(
+    chunk(
+      reduce(
+        pixelData.rawValue,
+        (acc: string, i: number) => {
+          return acc + numberToHex(i);
+        },
+        ''
+      ),
+      hexAllocated
+    ),
+    (i: string[]) => {
+      return join(i, '');
     }
-    const pixelTypeConstructor = getPixelTypeConstructor(
-      bitsAllocated.value,
-      pixelRepresentation.value,
-      isLittleEndian
-    );
-    console.log({
-      data,
-      new: convertPixelDataToType(data, pixelTypeConstructor),
-    });
-  }
+  );
+
+  const pixelDataBigEndian =
+    highBit.value + 1 === bitsStored.value
+      ? map(pixelDataHexString, littleEndianToBigEndian)
+      : pixelDataHexString;
+
+  const pixelDataSignedScaled = map(
+    pixelRepresentation.value === 0
+      ? map(pixelDataBigEndian, (hex: string) => parseInt(hex, 16))
+      : pixelDataToSignedInt(pixelDataBigEndian),
+    (num) => rescaleSlope.value * num + rescaleIntercept.value
+  );
+
+  const pixelDataWindowAdjusted = adjustToWindow(
+    pixelDataSignedScaled,
+    windowCenter,
+    windowWidth
+  );
+  console.log({
+    pixelDataSignedScaled,
+    pixelDataWindowAdjusted,
+    windowCenter,
+    windowWidth,
+    min: min(pixelDataWindowAdjusted),
+    max: max(pixelDataWindowAdjusted),
+  });
+
+  const pixelDataInterpreted =
+    photometricInterpretation.value === 'MONOCHROME1'
+      ? map(pixelDataWindowAdjusted, (i) => 255 - i)
+      : pixelDataWindowAdjusted;
+
+  const hexStringArrayPixelData = map(pixelDataInterpreted, (x: number) => {
+    const value = padStart(toUpper(x.toString(16)), 2, '0');
+    return `#${value.repeat(3)}`;
+  });
+  return hexStringArrayPixelData;
 };
 
 const readFile = async (file: File) => {
@@ -700,10 +712,11 @@ const readFile = async (file: File) => {
     ...dataset,
     ...fileMetaInfo,
     ...commandSetElements,
-  };
-  convertPixelData(fullDataset, isLittleEndian);
-
+    isLittleEndian,
+    isImplicitVR,
+  } as FullDataset;
+  // convertPixelData(fullDataset);
   return fullDataset;
 };
 
-export { readFile, getTagValue };
+export { readFile, getTagValue, getPixelData };
