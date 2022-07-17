@@ -4,9 +4,10 @@ import DicomDictionary from './dicom-dictionary';
 const Constants = {
   DICOM_MAGIC_PREFIX: 'DICM',
   ERRORS: {
-    MISSING_DICOM_FILE_META_INFORMATION_HEADER: 'The file does not contain DICOM File Meta Information Header or the "DICM" prefix is missing.'
+    MISSING_DICOM_FILE_META_INFORMATION_HEADER:
+      'The file does not contain DICOM File Meta Information Header or the "DICM" prefix is missing.',
   },
-  SPECIFIC_CHARACTER_SET_TAG: '00080005'
+  SPECIFIC_CHARACTER_SET_TAG: '00080005',
 };
 
 enum DicomDictionaryEntriesEnum {
@@ -14,16 +15,29 @@ enum DicomDictionaryEntriesEnum {
   'VM',
   'Name',
   'Retired',
-  'Keyword'
+  'Keyword',
 }
 
-const ExtraLengthVRs = ['OB', 'OD', 'OF', 'OL', 'OW', 'SQ', 'UC', 'UN', 'UR', 'UT'];
+const ExtraLengthVRs = [
+  'OB',
+  'OD',
+  'OF',
+  'OL',
+  'OW',
+  'SQ',
+  'UC',
+  'UN',
+  'UR',
+  'UT',
+];
 
+const GroupLengthEntry = ['UL', '1', 'GroupLength', '', 'GroupLength'];
 
 export {
   Constants,
   DicomDictionary,
   DicomDictionaryEntriesEnum,
   ExtraLengthVRs,
-  KnownUIDs
+  KnownUIDs,
+  GroupLengthEntry,
 };

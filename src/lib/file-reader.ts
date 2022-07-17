@@ -4,8 +4,12 @@ import _, {
   chunk,
   filter,
   find,
+  get,
+  inRange,
   isArray,
   isEqual,
+  isFunction,
+  isNull,
   isNumber,
   isObject,
   isString,
@@ -30,6 +34,7 @@ import {
   DicomDictionary,
   DicomDictionaryEntriesEnum,
   ExtraLengthVRs,
+  GroupLengthEntry,
   KnownUIDs,
 } from '../constants/index';
 import { ITagInfo } from '../types';
@@ -139,14 +144,35 @@ const getHexRepresentation = (group: number, element: number) => {
   return { hexGroup, hexElement };
 };
 
+const getTagName = (
+  dicomDictionaryEntry?: readonly string[],
+  isPrivateTag = false
+) => {
+  if (isPrivateTag) {
+    return 'PrivateTag';
+  }
+
+  if (!dicomDictionaryEntry) {
+    return 'Unknown';
+  }
+
+  return dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name];
+};
+
 const createTag = (
   group: number,
   element: number,
   values: ITagValues<any>
 ): ITag<any> => {
+  const isPrivateTag = group % 2 !== 0;
+
   const { hexGroup, hexElement } = getHexRepresentation(group, element);
   const stringRepresentation = `${hexGroup}${hexElement}`;
-  const dicomDictionaryEntry = DicomDictionary[stringRepresentation];
+
+  const dicomDictionaryEntry =
+    hexElement === '0000'
+      ? GroupLengthEntry
+      : DicomDictionary[stringRepresentation];
 
   const representations = {
     group,
@@ -155,18 +181,39 @@ const createTag = (
     hexElement,
     tuple: [hexGroup, hexElement],
     string: stringRepresentation,
-    name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name],
+    name: getTagName(dicomDictionaryEntry, isPrivateTag),
   };
+
+  if (isPrivateTag) {
+    return {
+      ...values,
+      representations,
+      representation: stringRepresentation,
+      VR: 'Unknown-PrivateTag',
+      name: 'Unknown-PrivateTag',
+      VM: 'Unknown-PrivateTag',
+      keyword: 'Unknown-PrivateTag',
+      retired: 'Unknown-PrivateTag',
+    };
+  }
 
   return {
     ...values,
     representations,
     representation: stringRepresentation,
     VR: values.VR || dicomDictionaryEntry[DicomDictionaryEntriesEnum.VR],
-    name: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Name],
-    VM: dicomDictionaryEntry[DicomDictionaryEntriesEnum.VM],
-    keyword: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Keyword],
-    retired: dicomDictionaryEntry[DicomDictionaryEntriesEnum.Retired],
+    name: getTagName(dicomDictionaryEntry),
+    VM: get(dicomDictionaryEntry, DicomDictionaryEntriesEnum.VM, 'Unknown'),
+    keyword: get(
+      dicomDictionaryEntry,
+      DicomDictionaryEntriesEnum.Keyword,
+      'Unknown'
+    ),
+    retired: get(
+      dicomDictionaryEntry,
+      DicomDictionaryEntriesEnum.Retired,
+      'Unknown'
+    ),
   } as ITag<typeof values.value>;
 };
 
@@ -190,20 +237,66 @@ const getTagInfo = (
     };
   }
   const { hexGroup, hexElement } = getHexRepresentation(group!, element!);
-  // console.log({group, element, VR, hexGroup, hexElement, tag: `${hexGroup}${hexElement}`, tagDD: DicomDictionary[`${hexGroup}${hexElement}`]});
+
   const guessVR =
-    DicomDictionary[`${hexGroup}${hexElement}`][DicomDictionaryEntriesEnum.VR];
+    hexElement === '0000'
+      ? GroupLengthEntry[DicomDictionaryEntriesEnum.VR]
+      : DicomDictionary[`${hexGroup}${hexElement}`][
+          DicomDictionaryEntriesEnum.VR
+        ];
   return {
     rawValue,
     length,
     VR: guessVR,
   };
 };
-// const getTagValue = (VR: string, value: Uint8Array) => {
-//   const longVRs = ['OB', 'OD', 'OF', 'OW', 'UN', 'UT'];
-//   const numberVRs =
-//   const stringVRs = []
-// }
+
+const unpack = (
+  data: Uint8Array,
+  tagData: Uint8Array,
+  elementPattern: string,
+  isImplicitVR: boolean,
+  isLittleEndian: boolean,
+  cursor: number
+) => {
+  const isUppercaseLetter = (char: string) =>
+    inRange(char.charCodeAt(0), 'A'.charCodeAt(0), 'Z'.charCodeAt(0));
+
+  const defaultTagLength = 8;
+  const extraLengthPattern = `${getEndianCharacter(isLittleEndian)}L`;
+
+  if (isImplicitVR) {
+    const [group, elem, length] = Bufferpack.unpack(elementPattern, tagData);
+    return [group, elem, null, length, defaultTagLength];
+  }
+  const [group, elem, VR, length] = Bufferpack.unpack(elementPattern, tagData);
+
+  if (!(isUppercaseLetter(VR[0]) && isUppercaseLetter(VR[1]))) {
+    const implicitVRElementPattern = getEndianPattern(isLittleEndian, true);
+    const [group, elem, length] = Bufferpack.unpack(
+      implicitVRElementPattern,
+      tagData
+    );
+    return [group, elem, null, length, defaultTagLength];
+  } else {
+    if (_.includes(ExtraLengthVRs, VR)) {
+      const extraLength = 4;
+      const extraLengthInfo = Uint8Helpers.getArrayRange(
+        data,
+        cursor + defaultTagLength,
+        extraLength
+      );
+      const [trueLength] = Bufferpack.unpack(
+        extraLengthPattern,
+        extraLengthInfo,
+        0
+      );
+      return [group, elem, VR, trueLength, defaultTagLength + extraLength];
+    }
+  }
+
+  return [group, elem, VR, length, defaultTagLength];
+};
 
 const readDataset = (
   bytes: Uint8Array,
@@ -224,130 +317,196 @@ const readDataset = (
 
   // // generator part
   const elementPattern = getEndianPattern(isLittleEndian, isImplicitVR);
-  const extraLengthPattern = `${getEndianCharacter(isLittleEndian)}L`;
+  // const extraLengthPattern = `${getEndianCharacter(isLittleEndian)}L`;
 
   const dataset: Dataset = {};
   // eslint-disable-next-line functional/no-let
   let cursorPositionChange = 0;
   const tagLength = 8;
 
-  if (isImplicitVR) {
-    // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
-    while (true) {
-      const tagInfo = Uint8Helpers.getArrayRange(
-        data,
-        cursorPositionChange,
-        tagLength
-      );
+  // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
+  while (true) {
+    const tagData = Uint8Helpers.getArrayRange(
+      data,
+      cursorPositionChange,
+      tagLength
+    );
 
-      if (tagInfo.length !== 8) {
+    if (tagData.length !== 8) {
+      break;
+    }
+
+    const [group, elem, VR, length, cursorChange] = unpack(
+      data,
+      tagData,
+      elementPattern,
+      isImplicitVR,
+      isLittleEndian,
+      cursorPositionChange
+    );
+
+    if (_.isFunction(stopWhen)) {
+      if (stopWhen(group, VR, length)) {
         break;
-      }
-      const [group, elem, length] = Bufferpack.unpack(
-        elementPattern,
-        tagInfo,
-        0
-      );
-
-      if (_.isFunction(stopWhen)) {
-        if (stopWhen(group, undefined, length)) {
-          break;
-        }
-      }
-
-      cursorPositionChange += 8;
-      if (length !== parseInt('0xFFFFFFFF', 16)) {
-        if (length > 0) {
-          const value = Uint8Helpers.getArrayRange(
-            data,
-            cursorPositionChange,
-            length
-          );
-          cursorPositionChange += length;
-          const tagInfo = getTagInfo(value, length, group, elem);
-
-          const tag = createTag(group, elem, {
-            length,
-            rawValue: value,
-            value: convertValue(tagInfo.VR, tagInfo, isLittleEndian),
-            VR: '',
-          });
-
-          dataset[tag.representation] = tag;
-        } else {
-          console.log('len 0');
-        }
-      } else {
-        console.log('len 0 hex');
       }
     }
-  } else {
-    // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
-    while (true) {
-      const tagInfo = Uint8Helpers.getArrayRange(
-        data,
-        cursorPositionChange,
-        tagLength
-      );
-      if (tagInfo.length !== 8) {
-        break;
-      }
-      const [group, elem, VR, length] = Bufferpack.unpack(
-        elementPattern,
-        tagInfo,
-        0
-      );
 
-      if (_.isFunction(stopWhen)) {
-        if (stopWhen(group, VR.toString(), length)) {
-          break;
-        }
-      }
+    cursorPositionChange += cursorChange;
 
-      cursorPositionChange += tagLength;
-      // eslint-disable-next-line functional/no-let
-      let trueLength = length;
-
-      if (_.includes(ExtraLengthVRs, VR)) {
-        const extraLength = 4;
-        const extraLengthInfo = Uint8Helpers.getArrayRange(
+    if (length !== parseInt('0xFFFFFFFF', 16)) {
+      if (length > 0) {
+        const value = Uint8Helpers.getArrayRange(
           data,
           cursorPositionChange,
-          extraLength
+          length
         );
-        const extraLengthUnpacked = Bufferpack.unpack(
-          extraLengthPattern,
-          extraLengthInfo,
-          0
-        );
-        trueLength = extraLengthUnpacked[0];
-        cursorPositionChange += extraLength;
-      }
+        cursorPositionChange += length;
 
-      // reading values!
-      if (trueLength !== parseInt('0xFFFFFFFF', 16)) {
-        if (trueLength > 0) {
-          const value = Uint8Helpers.getArrayRange(
-            data,
-            cursorPositionChange,
-            trueLength
-          );
-          cursorPositionChange += trueLength;
-          const tagInfo: ITagInfo = getTagInfo(value, length, group, elem, VR);
-
+        if (VR !== 'NONE') {
+          const tagInfo = getTagInfo(value, length, group, elem, VR);
           const tag = createTag(group, elem, {
             VR,
-            length: trueLength,
+            length,
             rawValue: value,
-            value: convertValue(VR, tagInfo, isLittleEndian),
+            value: convertValue(VR || tagInfo.VR, tagInfo, isLittleEndian),
           });
-          // eslint-disable-next-line functional/immutable-data
           dataset[tag.representation] = tag;
         }
       }
-      console.error('not implemented yet, readDataset explicitVR');
+    } else {
+      const newVR = VR === 'UN' ? 'SQ' : VR;
+
+      if (isNull(newVR)) {
+        console.error('Unhandled null VR, filereader.py:247');
+      }
+
+      if (newVR === 'SQ') {
+        console.error('Unhandled SQ, filereader.py:259');
+      } else {
+        console.error('Unhandled undefined length value, filereader.py:274');
+      }
     }
   }
+
+  // cursorPositionChange = 0;
+  // if (isImplicitVR) {
+  //   // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
+  //   while (true) {
+  //     const tagInfo = Uint8Helpers.getArrayRange(
+  //       data,
+  //       cursorPositionChange,
+  //       tagLength
+  //     );
+  //
+  //     if (tagInfo.length !== 8) {
+  //       break;
+  //     }
+  //     const [group, elem, length] = Bufferpack.unpack(
+  //       elementPattern,
+  //       tagInfo,
+  //       0
+  //     );
+  //
+  //     if (_.isFunction(stopWhen)) {
+  //       if (stopWhen(group, undefined, length)) {
+  //         break;
+  //       }
+  //     }
+  //
+  //     cursorPositionChange += 8;
+  //     if (length !== parseInt('0xFFFFFFFF', 16)) {
+  //       if (length > 0) {
+  //         const value = Uint8Helpers.getArrayRange(
+  //           data,
+  //           cursorPositionChange,
+  //           length
+  //         );
+  //         cursorPositionChange += length;
+  //         const tagInfo = getTagInfo(value, length, group, elem);
+  //
+  //         const tag = createTag(group, elem, {
+  //           length,
+  //           rawValue: value,
+  //           value: convertValue(tagInfo.VR, tagInfo, isLittleEndian),
+  //           VR: '',
+  //         });
+  //
+  //         dataset[tag.representation] = tag;
+  //       } else {
+  //         console.log('len 0');
+  //       }
+  //     } else {
+  //       console.log('len 0 hex');
+  //     }
+  //   }
+  // } else {
+  //   // eslint-disable-next-line functional/no-loop-statement,no-constant-condition
+  //   while (true) {
+  //     const tagInfo = Uint8Helpers.getArrayRange(
+  //       data,
+  //       cursorPositionChange,
+  //       tagLength
+  //     );
+  //     if (tagInfo.length !== 8) {
+  //       break;
+  //     }
+  //     const [group, elem, VR, length] = Bufferpack.unpack(
+  //       elementPattern,
+  //       tagInfo,
+  //       0
+  //     );
+  //
+  //     if (_.isFunction(stopWhen)) {
+  //       if (stopWhen(group, VR.toString(), length)) {
+  //         break;
+  //       }
+  //     }
+  //
+  //     cursorPositionChange += tagLength;
+  //     // eslint-disable-next-line functional/no-let
+  //     let trueLength = length;
+  //
+  //     if (_.includes(ExtraLengthVRs, VR)) {
+  //       const extraLength = 4;
+  //       const extraLengthInfo = Uint8Helpers.getArrayRange(
+  //         data,
+  //         cursorPositionChange,
+  //         extraLength
+  //       );
+  //       const extraLengthUnpacked = Bufferpack.unpack(
+  //         extraLengthPattern,
+  //         extraLengthInfo,
+  //         0
+  //       );
+  //       trueLength = extraLengthUnpacked[0];
+  //       cursorPositionChange += extraLength;
+  //     }
+  //
+  //     // reading values!
+  //     if (trueLength !== parseInt('0xFFFFFFFF', 16)) {
+  //       if (trueLength > 0) {
+  //         const value = Uint8Helpers.getArrayRange(
+  //           data,
+  //           cursorPositionChange,
+  //           trueLength
+  //         );
+  //         cursorPositionChange += trueLength;
+  //         const tagInfo: ITagInfo = getTagInfo(value, length, group, elem, VR);
+  //
+  //         const tag = createTag(group, elem, {
+  //           VR,
+  //           length: trueLength,
+  //           rawValue: value,
+  //           value: convertValue(VR, tagInfo, isLittleEndian),
+  //         });
+  //         // eslint-disable-next-line functional/immutable-data
+  //         dataset[tag.representation] = tag;
+  //       }
+  //     } else {
+  //       console.log('xD');
+  //     }
+  //   }
+  // }
 
   return {
     dataset,
@@ -379,17 +538,19 @@ const _isImplicitVr = (
   );
 
   if (foundImplicit !== isImplicitVRAssumed) {
-    console.error(
-      'not implemented yet, foundImplicit !== isImplicitVrAssumed!',
-      {
-        tagBytes,
-        foundImplicit,
-        isImplicitVRAssumed,
-        stopWhen,
-        isLittleEndian,
-      }
-    );
+    const endianCharacter = isLittleEndian ? '<' : '>';
+    const tag = Bufferpack.unpack(`${endianCharacter}HH`, tagBytes);
+    const vr = new TextDecoder().decode(rawVR);
+
+    if (isFunction(stopWhen) && stopWhen(tag[0], vr, 0)) {
+      return foundImplicit;
+    }
+
+    if (foundImplicit && isSequence) {
+      return true;
+    }
   }
+
   return foundImplicit;
 };
 
@@ -593,6 +754,7 @@ const adjustToWindow = (
 };
 
 const getPixelData = (dataset: Dataset) => {
+  console.log({ dataset });
   const {
     bitsAllocated,
     bitsStored,
@@ -632,28 +794,29 @@ const getPixelData = (dataset: Dataset) => {
       ? map(pixelDataHexString, littleEndianToBigEndian)
       : pixelDataHexString;
 
+  console.log({
+    pixelRepresentation,
+    rescaleSlope,
+    rescaleIntercept,
+  });
+  const rescaleSlopeValue = rescaleSlope ? rescaleSlope.value : 1;
+  const rescaleInterceptValue = rescaleIntercept ? rescaleIntercept.value : 0;
   const pixelDataSignedScaled = map(
     pixelRepresentation.value === 0
       ? map(pixelDataBigEndian, (hex: string) => parseInt(hex, 16))
       : pixelDataToSignedInt(pixelDataBigEndian),
-    (num) => rescaleSlope.value * num + rescaleIntercept.value
+    (num) => rescaleSlopeValue * num + rescaleInterceptValue
   );
+  console.log({ pixelDataSignedScaled });
 
   const pixelDataWindowAdjusted = adjustToWindow(
     pixelDataSignedScaled,
     windowCenter,
     windowWidth
   );
-  console.log({
-    pixelDataSignedScaled,
-    pixelDataWindowAdjusted,
-    windowCenter,
-    windowWidth,
-    min: min(pixelDataWindowAdjusted),
-    max: max(pixelDataWindowAdjusted),
-  });
 
   const pixelDataInterpreted =
+    photometricInterpretation &&
     photometricInterpretation.value === 'MONOCHROME1'
       ? map(pixelDataWindowAdjusted, (i) => 255 - i)
       : pixelDataWindowAdjusted;
