@@ -5,6 +5,7 @@ import _, {
   filter,
   find,
   get,
+  has,
   inRange,
   isArray,
   isEqual,
@@ -237,13 +238,15 @@ const getTagInfo = (
     };
   }
   const { hexGroup, hexElement } = getHexRepresentation(group!, element!);
+  const dicomDictionaryEntry = DicomDictionary[`${hexGroup}${hexElement}`];
 
   const guessVR =
     hexElement === '0000'
       ? GroupLengthEntry[DicomDictionaryEntriesEnum.VR]
-      : DicomDictionary[`${hexGroup}${hexElement}`][
-          DicomDictionaryEntriesEnum.VR
-        ];
+      : dicomDictionaryEntry
+      ? dicomDictionaryEntry[DicomDictionaryEntriesEnum.VR]
+      : '';
+
   return {
     rawValue,
     length,
@@ -296,6 +299,16 @@ const unpack = (
   }
 
   return [group, elem, VR, length, defaultTagLength];
+};
+
+const getSafeKey = (object: Record<string, unknown>, key: string) => {
+  // eslint-disable-next-line functional/no-let
+  let index = 1;
+  // eslint-disable-next-line functional/no-loop-statement
+  while (has(object, index === 0 ? key : `${key}-${index}`)) {
+    index += 1;
+  }
+  return `${key}-${index}`;
 };
 
 const readDataset = (
@@ -370,7 +383,8 @@ const readDataset = (
             rawValue: value,
             value: convertValue(VR || tagInfo.VR, tagInfo, isLittleEndian),
           });
-          dataset[tag.representation] = tag;
+
+          dataset[getSafeKey(dataset, tag.keyword)] = tag;
         }
       }
     } else {
