@@ -6,10 +6,11 @@ import { ITagInfo } from '../types';
 import {
   decodeToText,
   getEndianCharacter,
+  getMultiString,
   handleDA,
+  handleMultiString,
   handleTM,
 } from './helpers';
-import { getMultiString, handleMultiString } from './multi-string';
 
 const convertNumbers =
   (format: string) => (rawValue: Uint8Array, isLittleEndian: boolean) => {
@@ -163,21 +164,6 @@ const converters: { [key: string]: CallableFunction } = {
   'US or SS': convertOB,
 };
 
-// {
-//   "VR": "SH",
-//   "length": 8,
-//   "rawValue": {
-//   "0": 73,
-//     "1": 78,
-//     "2": 70,
-//     "3": 95,
-//     "4": 52,
-//     "5": 46,
-//     "6": 53,
-//     "7": 32
-// }
-// }
-// UL OB UI UI UI UI UI UI SH
 const convertValue = (
   VR: string,
   tagInfo: ITagInfo,

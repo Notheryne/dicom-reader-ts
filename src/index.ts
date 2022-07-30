@@ -1,1 +1,1 @@
-export * from './lib/file-reader';
+export * from './lib';

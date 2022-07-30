@@ -38,6 +38,6 @@ export {
   DicomDictionary,
   DicomDictionaryEntriesEnum,
   ExtraLengthVRs,
-  KnownUIDs,
   GroupLengthEntry,
+  KnownUIDs,
 };
