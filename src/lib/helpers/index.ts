@@ -1,4 +1,14 @@
-import _, { chunk, has, join, map, reverse, takeRight } from 'lodash';
+import _, {
+  chunk,
+  has,
+  isUndefined,
+  join,
+  map,
+  max,
+  min,
+  reverse,
+  takeRight,
+} from 'lodash';
 
 const getEndianCharacter = (isLittleEndian: boolean) => {
   return isLittleEndian ? '<' : '>';
@@ -130,6 +140,12 @@ const getMultiString = (value: string) => {
   return valueSplit.length === 1 ? valueSplit[0] : valueSplit;
 };
 
+const getInRange = (value: number, minimum: number, maximum?: number) => {
+  const minValue = min([value, maximum]);
+  const maxValue = max([minValue, minimum]);
+  return isUndefined(maxValue) ? value : maxValue;
+};
+
 const handleMultiString = (
   value: string | string[],
   callback: CallableFunction
@@ -146,6 +162,7 @@ export {
   getEndianCharacter,
   getEndianPattern,
   getHexRepresentation,
+  getInRange,
   getMultiString,
   getSafeKey,
   handleDA,

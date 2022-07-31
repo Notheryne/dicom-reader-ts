@@ -33,8 +33,30 @@ const ExtraLengthVRs = [
 
 const GroupLengthEntry = ['UL', '1', 'GroupLength', '', 'GroupLength'];
 
+const DefaultCanvasId = 'image-annotator-canvas';
+
+const DefaultScrollSensitivity = 0.001;
+
+const DefaultBrightnessSensitivity = 10;
+
+const DefaultMinBrightness = 0.3;
+const DefaultMaxBrightness = 10;
+
+const DataAttributes = {
+  ZOOM: 'data-zoom',
+  DRAG_LEFT_X: 'data-drag-left-x',
+  DRAG_LEFT_Y: 'data-drag-left-y',
+  DRAG_RIGHT_Y: 'data-drag-right-y',
+};
+
 export {
   Constants,
+  DataAttributes,
+  DefaultBrightnessSensitivity,
+  DefaultCanvasId,
+  DefaultMaxBrightness,
+  DefaultMinBrightness,
+  DefaultScrollSensitivity,
   DicomDictionary,
   DicomDictionaryEntriesEnum,
   ExtraLengthVRs,

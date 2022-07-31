@@ -13,8 +13,16 @@ import {
   notGroup0002,
   Uint8Helpers,
 } from './helpers';
-import { createTag, getTagInfo } from './tag-helpers';
+import { createTag, getTagInfo } from './helpers/tag-helpers';
 
+console.log({
+  getEndianCharacter,
+  getEndianPattern,
+  getSafeKey,
+  notGroup0000,
+  notGroup0002,
+  Uint8Helpers,
+});
 const readPreamble = (bytes: Uint8Array) => {
   const [fileMetaInformationHeader] = Uint8Helpers.splitArray(bytes, 132);
   const [preamble, magic] = Uint8Helpers.splitArray(

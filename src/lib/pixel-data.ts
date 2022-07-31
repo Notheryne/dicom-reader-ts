@@ -15,7 +15,7 @@ import {
 import { Dataset, ITag } from '../types';
 
 import { littleEndianToBigEndian, numberToHex } from './helpers';
-import { getTagsGroup, getTagValue } from './tag-helpers';
+import { getTagsGroup, getTagValue } from './helpers/tag-helpers';
 
 const pixelDataToSignedInt = (data: string[]) => {
   return map(data, (num: string) => {

@@ -1,14 +1,16 @@
+import { displayImage } from './displaying';
 import { readBytes, readFile } from './file-reader';
-import { getPixelData } from './pixel-data';
 import {
   createTag,
   getTagInfo,
   getTagsGroup,
   getTagValue,
-} from './tag-helpers';
+} from './helpers/tag-helpers';
+import { getPixelData } from './pixel-data';
 
 export {
   createTag,
+  displayImage,
   getPixelData,
   getTagInfo,
   getTagValue,

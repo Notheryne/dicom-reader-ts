@@ -43,12 +43,29 @@ type ITagInfo = {
   rawValue: Uint8Array;
 };
 
+type IDisplayImageOptions = {
+  disableScroll?: boolean;
+  scrollSensitivity?: number;
+  disablePan?: boolean;
+  disableBrightness?: boolean;
+  brightnessSensitivity?: number;
+  minBrightness?: number;
+  maxBrightness?: number;
+};
+
+type IPositionChange = {
+  x: number;
+  y: number;
+};
+
 export type {
-  StopWhenFunction,
-  IKnownTagValues,
-  ITagValues,
-  ITag,
   Dataset,
   FullDataset,
+  IDisplayImageOptions,
+  IKnownTagValues,
+  IPositionChange,
+  ITag,
   ITagInfo,
+  ITagValues,
+  StopWhenFunction,
 };

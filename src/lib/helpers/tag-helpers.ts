@@ -16,10 +16,10 @@ import {
   DicomDictionary,
   DicomDictionaryEntriesEnum,
   GroupLengthEntry,
-} from '../constants';
-import { Dataset, ITag, ITagInfo, ITagValues } from '../types';
+} from '../../constants';
+import { Dataset, ITag, ITagInfo, ITagValues } from '../../types';
 
-import { getHexRepresentation } from './helpers';
+import { getHexRepresentation } from './index';
 
 const getTagName = (
   dicomDictionaryEntry?: readonly string[],
