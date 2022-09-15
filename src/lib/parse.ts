@@ -285,9 +285,7 @@ const parseFile = (bytes: Uint8Array) => {
   const { dataset: commandSetElements, newCursorPosition: datasetStart } =
     readCommandSetElements(bytes, cursorAfterFileMeta);
 
-  // const peek = Uint8Helpers.getArrayRange(bytes, datasetStart, 1);
-
-  const transferSyntax = get(fileMetaInfo, '00020010'); // TransferSyntaxUID
+  const transferSyntax = get(fileMetaInfo, '00020010');
 
   const { isImplicitVR, isLittleEndian } =
     readOrGuessIsImplicitVrAndIsLittleEndian(
